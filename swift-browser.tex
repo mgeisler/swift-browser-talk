@@ -153,12 +153,14 @@
   \end{itemize}
 \end{frame}
 
+\section{Swift API}
+
 \newcommand{\contreq}[1]{\texttt{\makebox[3em][l]{#1} %
     /v1/<account>/<container>}}
 \newcommand{\objreq}[1]{\texttt{\makebox[3em][l]{#1} %
     /v1/<account>/<container>/<object>}}
 
-\begin{frame}{Swift REST API}
+\begin{frame}{Swift Object API}
   Modern REST API for operating on objects:
   \begin{itemize}
   \item \alert<2>{\objreq{GET}}
@@ -171,7 +173,7 @@
   Full API documentation: \url{http://developer.openstack.org/api-ref-objectstorage-v1.html}.
 \end{frame}
 
-\begin{frame}{Swift REST API}
+\begin{frame}{Swift Container API}
   Operating on containers:
   \begin{itemize}
   \item \contreq{GET}
@@ -226,6 +228,8 @@
   Via X-Auth-Token
 \end{frame}
 
+\section{AngularJS Swift Service}
+
 \begin{frame}[fragile]{SwiftService}
   Simple wrapper around the Swift API:
 \begin{lstlisting}
@@ -268,6 +272,8 @@ mod.controller('RootCtrl', function ($scope, $swift, $modal) {
 });
 \end{lstlisting}
 \end{frame}
+
+\subsection{Testing}
 
 \begin{frame}[fragile,allowframebreaks]{Testing the Swift Service}
 Setup:
@@ -319,6 +325,9 @@ describe('when logging in', function () {
 });
 \end{lstlisting}
 
+This is ad-hoc mocking, we'll do more structured mocking later.
+
+
 \framebreak
 
 We can also test that the token is set in the headers:
@@ -341,6 +350,122 @@ describe('when logging in', function () {
 });
 \end{lstlisting}    
 \end{frame}
+
+\begin{frame}[fragile]{Running the Tests}
+  I used Grunt as the task runner for Swift Browser:
+\begin{lstlisting}[language=sh, basicstyle=\tiny\ttfamily]
+$ grunt karma:single
+Running "karma:single" (karma) task
+INFO [karma]: Karma v0.12.31 server started at http://localhost:9876/v1/AUTH_abc/container/
+INFO [launcher]: Starting browser Chrome
+INFO [launcher]: Starting browser Firefox
+INFO [Chrome 40.0.2214 (Linux)]: Connected on socket olMPm8XdvmSRvrVJmEDz with id 24050271
+INFO [Iceweasel 31.5.0 (Linux)]: Connected on socket 6cbB6yW-e0YQzlCumED0 with id 62219617
+Chrome 40.0.2214 (Linux): Executed 51 of 51 SUCCESS (0.292 secs / 0.28 secs)
+Iceweasel 31.5.0 (Linux): Executed 51 of 51 SUCCESS (0.426 secs / 0.262 secs)
+TOTAL: 102 SUCCESS
+
+Done, without errors.
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,allowframebreaks]{Simulating Swift}
+  Goals for testing:
+  \begin{itemize}
+  \item avoid dependency on a full Swift installation
+  \item make test setup easy
+  \item make testing fast
+  \end{itemize}
+
+  \framebreak
+
+  Swift is a relatively simple service, so we can simulate it!
+  \begin{itemize}
+  \item maintain a list of containers
+  \item maintain a list of objects per container
+  \item maintain data and metadata per object
+  \item respond to GET/HEAD/PUT/DELETE
+  \item \dots
+  \item profit?
+  \end{itemize}
+
+  %\pause
+
+  Yes, turned out to take 330 lines of code to simulate Swift!
+
+  \framebreak
+
+  SwiftSimulator service:
+\begin{lstlisting}
+function SwiftSimulator($httpBackend) {
+    var prefix = escape(accountUrl() + '/');
+    var container = '([^/]+?)';
+    var object = '(.+)';
+    var qsOrEmpty = '(?:' + escape('?') + '(.*)|$)';
+    this.listRegex = new RegExp(prefix + container + qsOrEmpty);
+    this.objRegex = new RegExp(prefix + container + escape('/') + object);
+
+    $httpBackend.whenGET(accountUrl())
+        .respond(this.listContainers.bind(this));
+    $httpBackend.whenGET(this.listRegex)
+        .respond(this.listObjects.bind(this));
+    $httpBackend.whenPUT(this.listRegex)
+        .respond(this.createContainer.bind(this));
+}
+\end{lstlisting}
+
+\framebreak
+
+Creating a new container:
+\begin{lstlisting}
+SwiftSimulator.prototype.createContainer = function (method, url) {
+    var match = url.match(this.listRegex);
+    var name = match[1];
+    if (this.data[name]) {
+        return [202, null];
+    } else {
+        this.addContainer(name);
+        return [201, null];
+    }
+};
+\end{lstlisting}
+
+\framebreak
+Getting an object:
+\begin{lstlisting}
+SwiftSimulator.prototype.findObjectOr404 = function (url, callback) {
+    return this.findContainerOr404(url, function (cont, contName, objName) {
+        var object = cont.objects[objName];
+        if (!object) {
+            return [404, 'Not Found'];
+        }
+        return callback(cont, object, contName, objName);
+    });
+};
+
+SwiftSimulator.prototype.getObject = function (method, url) {
+    return this.findObjectOr404(url, function (cont, object) {
+        return [200, object.content, object.headers];
+    });
+};
+\end{lstlisting}
+
+\end{frame}
+
+\begin{frame}{Injecting the Simulator}
+  The \code{ngMockE2E.\$httpBackend} basically says
+  \begin{itemize}
+  \item you can me to mock HTTP requests (great!)
+  \item make a second app that depends on your normal app (hmm)
+  \item go bootstrap that yourself (uh oh)
+  \end{itemize}
+
+  Here is an easier way:
+  \begin{itemize}
+  \item use addMockModule to register code to run before each test
+  \end{itemize}
+\end{frame}
+
 
 \end{document}
 
